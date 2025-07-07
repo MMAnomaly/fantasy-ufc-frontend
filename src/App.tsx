@@ -4,6 +4,9 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged }
 import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, updateDoc, arrayUnion } from 'firebase/firestore';
 
 // Global variables provided by the Canvas environment
+// These are typically provided by the hosting environment (like Canvas itself)
+// When deploying to Netlify/Vercel, you might need to configure these as environment variables
+// or remove them if not strictly needed for your deployed app's core functionality.
 declare const __app_id: string | undefined;
 declare const __firebase_config: string | undefined;
 declare const __initial_auth_token: string | undefined;
@@ -12,7 +15,7 @@ declare const __initial_auth_token: string | undefined;
 // IMPORTANT: During local development, this should be 'http://127.0.0.1:5000'.
 // When you deploy your React app to a public host (Netlify/Vercel),
 // you MUST update this URL to the public URL of your DEPLOYED Flask backend.
-const BACKEND_URL = 'http://127.0.0.1:5000';
+const BACKEND_URL = 'http://127.0.0.1:5000'; // Keep this for local testing, update for deployment!
 
 // All 11 official UFC weight classes
 const WEIGHT_CLASSES = [
@@ -63,8 +66,20 @@ function App() {
   // Initialize Firebase and set up authentication
   useEffect(() => {
     try {
-      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-      const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+      // These global variables are for the Gemini Canvas environment.
+      // For external deployment (Netlify/Vercel), you would typically
+      // initialize Firebase with your actual Firebase project config
+      // (e.g., from your Firebase project settings -> Web app -> Config).
+      // You would store these config values as environment variables in your hosting platform.
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
+      const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+        apiKey: "YOUR_FIREBASE_API_KEY", // Replace with your actual Firebase API Key
+        authDomain: "YOUR_FIREBASE_AUTH_DOMAIN",
+        projectId: "YOUR_FIREBASE_PROJECT_ID",
+        storageBucket: "YOUR_FIREBASE_STORAGE_BUCKET",
+        messagingSenderId: "YOUR_FIREBASE_MESSAGING_SENDER_ID",
+        appId: "YOUR_FIREBASE_APP_ID"
+      };
 
       const firebaseApp = initializeApp(firebaseConfig);
       const firestoreDb = getFirestore(firebaseApp);
@@ -86,9 +101,10 @@ function App() {
             await setDoc(userDocRef, { displayName: defaultName }, { merge: true });
             setDisplayName(defaultName);
           }
-          // Only set loading to false after both Firebase and fighter data are loaded
-          // We will manage overall loading with a combined check
         } else {
+          // For external deployment, you might use signInAnonymously directly
+          // or implement a proper sign-up/login flow.
+          // __initial_auth_token is specific to the Canvas environment.
           if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
             await signInWithCustomToken(firebaseAuth, __initial_auth_token);
           } else {
@@ -110,7 +126,7 @@ function App() {
   useEffect(() => {
     const fetchFighters = async () => {
       try {
-        setLoading(true); // Indicate loading for fighter data
+        setLoading(true);
         const response = await fetch(`${BACKEND_URL}/fighters`);
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -120,19 +136,23 @@ function App() {
         setError(null);
       } catch (err: any) {
         console.error("Failed to fetch fighters:", err);
-        setError(`Failed to load fighter data from backend: ${err.message}. Please ensure the Python backend is running.`);
+        setError(`Failed to load fighter data from backend: ${err.message}. Please ensure the Python backend is running at ${BACKEND_URL}.`);
       } finally {
-        setLoading(false); // Done loading fighter data
+        setLoading(false);
       }
     };
     fetchFighters();
-  }, []); // Run only once on component mount
+  }, []);
 
   // Set up real-time listener for current competition
   useEffect(() => {
     if (!db || !userId) return;
 
-    const competitionsRef = collection(db, 'artifacts', __app_id, 'public', 'data', 'competitions');
+    // The __app_id is specific to the Canvas environment.
+    // For external deployment, you might hardcode an app ID or fetch it differently.
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+    const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
     const q = query(competitionsRef, where('players', 'array-contains', userId));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -188,11 +208,12 @@ function App() {
     const newName = e.target.value;
     setDisplayName(newName);
     if (db && userId) {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
       try {
-        const userDocRef = doc(db, 'artifacts', __app_id, 'users', userId);
+        const userDocRef = doc(db, 'artifacts', appId, 'users', userId);
         await setDoc(userDocRef, { displayName: newName }, { merge: true });
         if (currentCompetition && currentCompetition.playerNames[userId]) {
-          const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+          const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
           await updateDoc(competitionRef, {
             [`playerNames.${userId}`]: newName
           });
@@ -211,8 +232,9 @@ function App() {
       return;
     }
     setLoading(true);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
     try {
-      const competitionsRef = collection(db, 'artifacts', __app_id, 'public', 'data', 'competitions');
+      const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
       const newCompetitionRef = doc(competitionsRef);
       await setDoc(newCompetitionRef, {
         name: competitionName.trim(),
@@ -246,8 +268,9 @@ function App() {
       return;
     }
     setLoading(true);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', competitionName.trim());
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', competitionName.trim());
       const compDocSnap = await getDoc(competitionRef);
 
       if (compDocSnap.exists()) {
@@ -304,8 +327,9 @@ function App() {
     }
 
     setLoading(true);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
       const shuffledPlayers = [...currentCompetition.players].sort(() => Math.random() - 0.5);
       await updateDoc(competitionRef, { players: shuffledPlayers });
       setMessage("Player order shuffled!");
@@ -340,8 +364,9 @@ function App() {
     }
 
     setLoading(true);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
       await updateDoc(competitionRef, { players: players });
       setError(null);
     } catch (err: any) {
@@ -369,8 +394,9 @@ function App() {
     }
 
     setLoading(true);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
       const roundsPerPlayer = WEIGHT_CLASSES.length + 1; // 1 for each weight class + 1 for flex
       const draftOrder = generateSnakeDraftOrder(currentCompetition.players, roundsPerPlayer);
 
@@ -450,8 +476,9 @@ function App() {
     }
 
     setLoading(true);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Fallback for local/non-Canvas
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
       const nextPickIndex = currentCompetition.currentPickIndex + 1;
       const nextPickerId = currentCompetition.draftOrder[nextPickIndex];
       const newStatus = nextPickIndex >= currentCompetition.draftOrder.length ? 'completed' : 'in_progress';
