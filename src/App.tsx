@@ -47,46 +47,39 @@ const DRAFTKINGS_SCORING = {
 };
 
 function App() {
-  // State variables for Firebase, user, competition, and UI elements
-  const [app, setApp] = useState<any | null>(null); // Firebase app instance
-  const [db, setDb] = useState<Firestore | null>(null); // Firestore instance
-  const [auth, setAuth] = useState<any | null>(null); // Firebase Auth instance
-  const [userId, setUserId] = useState<string | null>(null); // Current user's ID
-  const [displayName, setDisplayName] = useState<string>(''); // User's display name
-  const [competitionName, setCompetitionName] = useState<string>(''); // Input for new/joining competition
-  const [currentCompetition, setCurrentCompetition] = useState<any | null>(null); // Active competition details
-  const [loading, setLoading] = useState<boolean>(true); // Overall loading state
-  const [error, setError] = useState<string | null>(null); // Error messages
-  const [message, setMessage] = useState<string | null>(null); // Info/success messages
-  const [searchQuery, setSearchQuery] = useState<string>(''); // Search input for fighters
-  const [allFighters, setAllFighters] = useState<any[]>([]); // List of all fighters from backend
+  const [app, setApp] = useState<any | null>(null);
+  const [db, setDb] = useState<Firestore | null>(null);
+  const [auth, setAuth] = useState<any | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string>('');
+  const [competitionName, setCompetitionName] = useState<string>('');
+  const [currentCompetition, setCurrentCompetition] = useState<any | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [allFighters, setAllFighters] = useState<any[]>([]);
 
-  const [timeLeft, setTimeLeft] = useState<number>(180); // Time left for current pick (3 minutes default)
-  const timerRef = useRef<number | null>(null); // Ref to hold the timer interval ID
+  const [timeLeft, setTimeLeft] = useState<number>(180);
+  const timerRef = useRef<number | null>(null);
 
-  // Effect to initialize Firebase and handle user authentication state
+  // Initialize Firebase and set up authentication
   useEffect(() => {
     try {
-      // Safely get app_id and firebase_config from global variables or use defaults
-      // Ensure appId is always a string for Firestore paths
       const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
       const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 
-      // Initialize Firebase services
       const firebaseApp = initializeApp(firebaseConfig);
       const firestoreDb = getFirestore(firebaseApp);
       const firebaseAuth = getAuth(firebaseApp);
 
-      // Store initialized services in state
       setApp(firebaseApp);
       setDb(firestoreDb);
       setAuth(firebaseAuth);
 
-      // Set up authentication state listener
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user: User | null) => {
         if (user) {
           setUserId(user.uid);
-          // Firestore paths must be strings, ensure appId is string
           const userDocRef = doc(firestoreDb, 'artifacts', appId, 'users', user.uid);
           const userDocSnap = await getDoc(userDocRef);
           if (userDocSnap.exists()) {
@@ -105,123 +98,106 @@ function App() {
         }
       });
 
-      // Cleanup function for the auth state listener
       return () => unsubscribe();
 
     } catch (err: any) {
-      // Catch and display any errors during Firebase initialization or authentication
       console.error("Firebase initialization or authentication failed:", err);
       setError(`Failed to initialize Firebase: ${err.message}`);
       setLoading(false);
     }
-  }, []); // Empty dependency array ensures this runs only once on component mount
+  }, []);
 
-  // Effect to fetch fighters from the backend API
+  // Fetch fighters from backend
   useEffect(() => {
     const fetchFighters = async () => {
       try {
-        setLoading(true); // Set loading state while fetching
-        const response = await fetch(`${BACKEND_URL}/fighters`); // Fetch from backend URL
+        setLoading(true);
+        const response = await fetch(`${BACKEND_URL}/fighters`);
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const data = await response.json(); // Parse JSON response
-        setAllFighters(data); // Store fetched fighters in state
-        setError(null); // Clear any previous errors
+        const data = await response.json();
+        setAllFighters(data);
+        setError(null);
       } catch (err: any) {
         console.error("Failed to fetch fighters:", err);
-        // Display error if fetching fails, guiding user to check backend
         setError(`Failed to load fighter data from backend: ${err.message}. Please ensure the Python backend is running.`);
       } finally {
-        setLoading(false); // Clear loading state
+        setLoading(false);
       }
     };
-    fetchFighters(); // Call the fetch function
-  }, []); // Empty dependency array ensures this runs only once on component mount
+    fetchFighters();
+  }, []);
 
-  // Effect to set up real-time listener for the current competition from Firestore
+  // Set up real-time listener for current competition
   useEffect(() => {
-    // Only proceed if Firestore DB and user ID are available
     if (!db || !userId) return;
 
-    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
-    // Query Firestore for competitions where the current user is a player
+    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
     const q = query(competitionsRef, where('players', 'array-contains', userId));
 
-    // Set up real-time snapshot listener
-    const unsubscribe = onSnapshot(q, (snapshot: any) => { // snapshot is typed as any for flexibility
+    const unsubscribe = onSnapshot(q, (snapshot: any) => {
       if (!snapshot.empty) {
-        // If a competition is found, update currentCompetition state
-        const compDoc = snapshot.docs[0]; // Assuming user is in only one active competition
+        const compDoc = snapshot.docs[0];
         setCurrentCompetition({ id: compDoc.id, ...compDoc.data() });
         const data = compDoc.data();
-        // If draft is in progress, sync the timer based on start time
         if (data.status === 'in_progress' && data.currentPickStartTime) {
           const elapsed = Math.floor((Date.now() - data.currentPickStartTime) / 1000);
-          const remaining = Math.max(0, 180 - elapsed); // 180 seconds = 3 minutes
+          const remaining = Math.max(0, 180 - elapsed);
           setTimeLeft(remaining);
         }
       } else {
-        setCurrentCompetition(null); // No active competition found
+        setCurrentCompetition(null);
       }
-    }, (err: any) => { // Error handler for snapshot listener
+    }, (err: any) => {
       console.error("Error listening to competitions:", err);
       setError(`Failed to load competitions: ${err.message}`);
     });
 
-    // Cleanup function for the snapshot listener
     return () => unsubscribe();
-  }, [db, userId]); // Re-run if db or userId changes
+  }, [db, userId]);
 
-  // Effect to manage the draft countdown timer
+  // Draft timer effect
   useEffect(() => {
-    // Only run timer if draft is in progress and it's the current user's turn
     if (currentCompetition?.status === 'in_progress' && currentCompetition?.currentPickerId === userId) {
-      // Clear any existing timer to prevent multiple intervals
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
-      // Set a new interval to decrement time every second
       timerRef.current = window.setInterval(() => {
         setTimeLeft((prevTime) => {
           if (prevTime <= 1) {
-            clearInterval(timerRef.current!); // Stop timer when it reaches 0
-            // TODO: Implement auto-skip or random pick logic here
+            clearInterval(timerRef.current!);
             return 0;
           }
-          return prevTime - 1; // Decrement time
+          return prevTime - 1;
         });
       }, 1000);
     } else {
-      // Clear timer if draft is not in progress or it's not user's turn
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     }
-    // Cleanup function for the timer interval
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     };
-  }, [currentCompetition, userId]); // Re-run if competition state or user ID changes
+  }, [currentCompetition, userId]);
 
   // Handler for changing the user's display name
   const handleDisplayNameChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const newName = e.target.value;
-    setDisplayName(newName); // Update local state immediately
-    if (db && userId) { // Ensure db and userId are available
-      const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    setDisplayName(newName);
+    if (db && userId) {
+      const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
       try {
-        // Update user's display name in their private user document
         const userDocRef = doc(db, 'artifacts', appId, 'users', userId);
         await setDoc(userDocRef, { displayName: newName }, { merge: true });
-        // If part of a competition, also update their display name in the competition document
         if (currentCompetition && currentCompetition.playerNames && userId) {
           const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
           await updateDoc(competitionRef, {
-            [`playerNames.${userId}`]: newName // Use computed property name for dynamic key
+            [`playerNames.${userId}`]: newName
           });
         }
       } catch (err: any) {
@@ -233,22 +209,20 @@ function App() {
 
   // Function to create a new fantasy competition
   const createCompetition = async () => {
-    // Validate inputs
     if (!db || !userId || !competitionName.trim()) {
       setError("Please enter a competition name and ensure you are authenticated.");
       return;
     }
-    setLoading(true); // Set loading state
-    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    setLoading(true);
+    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     try {
-      // Create a new competition document in Firestore
       const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
-      const newCompetitionRef = doc(competitionsRef); // Firestore generates unique ID
+      const newCompetitionRef = doc(competitionsRef);
       await setDoc(newCompetitionRef, {
         name: competitionName.trim(),
-        players: [userId], // Add creator as first player
-        playerNames: { [userId]: displayName }, // Map player ID to display name
-        status: 'setup', // Initial status
+        players: [userId],
+        playerNames: { [userId]: displayName },
+        status: 'setup',
         createdAt: Date.now(),
         draftOrder: [],
         currentPickIndex: 0,
@@ -256,61 +230,57 @@ function App() {
         currentPickStartTime: null,
         draftedFighters: {},
         scores: {},
-        creatorId: userId // Store creator's ID
+        creatorId: userId
       });
-      setCompetitionName(''); // Clear input field
-      setError(null); // Clear errors
+      setCompetitionName('');
+      setError(null);
       setMessage(`Competition "${competitionName.trim()}" created! Share the Competition ID above to invite others.`);
     } catch (err: any) {
       console.error("Error creating competition:", err);
       setError(`Failed to create competition: ${err.message}`);
     } finally {
-      setLoading(false); // Clear loading state
+      setLoading(false);
     }
   };
 
   // Function to join an existing fantasy competition
   const joinCompetition = async () => {
-    // Validate inputs
     if (!db || !userId || !competitionName.trim()) {
       setError("Please enter a competition ID and ensure you are authenticated.");
       return;
     }
-    setLoading(true); // Set loading state
-    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    setLoading(true);
+    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     try {
-      // Get the competition document by ID
       const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', competitionName.trim());
       const compDocSnap = await getDoc(competitionRef);
 
       if (compDocSnap.exists()) {
         const compData = compDocSnap.data();
-        // Prevent joining if draft has already started
         if (compData.status !== 'setup') {
           setError("Cannot join: Draft has already started or completed for this competition.");
           setLoading(false);
           return;
         }
-        // Add current user to players array if not already present
         if (!compData.players.includes(userId)) {
           await updateDoc(competitionRef, {
-            players: arrayUnion(userId), // Atomically add user ID to array
-            [`playerNames.${userId}`]: displayName // Add display name mapping
+            players: arrayUnion(userId),
+            [`playerNames.${userId}`]: displayName
           });
           setMessage(`Successfully joined competition "${compData.name}"!`);
         } else {
           setMessage(`You are already in competition "${compData.name}".`);
         }
-        setCompetitionName(''); // Clear input
-        setError(null); // Clear errors
+        setCompetitionName('');
+        setError(null);
       } else {
-        setError("Competition not found. Please check the ID."); // Competition not found
+        setError("Competition not found. Please check the ID.");
       }
     } catch (err: any) {
       console.error("Error joining competition:", err);
       setError(`Failed to join competition: ${err.message}`);
     } finally {
-      setLoading(false); // Clear loading state
+      setLoading(false);
     }
   };
 
@@ -319,17 +289,16 @@ function App() {
     let order: string[] = [];
     for (let i = 0; i < rounds; i++) {
       if (i % 2 === 0) {
-        order = order.concat(players); // Forward order
+        order = order.concat(players);
       } else {
-        order = order.concat([...players].reverse()); // Reverse order
+        order = order.concat([...players].reverse());
       }
     }
     return order;
-  }, []); // Memoize function
+  }, []);
 
   // Function to shuffle player order (only for creator in setup phase)
   const shufflePlayers = async () => {
-    // Validate permissions and competition status
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId) {
       setError("Only the competition creator can shuffle players.");
       return;
@@ -339,37 +308,35 @@ function App() {
       return;
     }
 
-    setLoading(true); // Set loading state
-    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    setLoading(true);
+    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     try {
       const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
-      const shuffledPlayers = [...currentCompetition.players].sort(() => Math.random() - 0.5); // Shuffle array
-      await updateDoc(competitionRef, { players: shuffledPlayers }); // Update Firestore
-      setMessage("Player order shuffled!"); // Success message
-      setError(null); // Clear errors
+      const shuffledPlayers = [...currentCompetition.players].sort(() => Math.random() - 0.5);
+      await updateDoc(competitionRef, { players: shuffledPlayers });
+      setMessage("Player order shuffled!");
+      setError(null);
     }
     catch (err: any) {
       console.error("Error shuffling players:", err);
       setError(`Failed to shuffle players: ${err.message}`);
     } finally {
-      setLoading(false); // Clear loading state
+      setLoading(false);
     }
   };
 
   // Function to manually move a player's position in the draft order (creator only)
   const movePlayer = async (playerToMoveId: string, direction: 'up' | 'down') => {
-    // Validate permissions and competition status
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId || currentCompetition.status !== 'setup') {
       setError("Only the competition creator can reorder players in setup phase.");
       return;
     }
 
-    const players = [...currentCompetition.players]; // Create a mutable copy of players array
-    const index = players.indexOf(playerToMoveId); // Find index of player to move
+    const players = [...currentCompetition.players];
+    const index = players.indexOf(playerToMoveId);
 
-    if (index === -1) return; // Player not found
+    if (index === -1) return;
 
-    // Perform the swap based on direction
     if (direction === 'up' && index > 0) {
       [players[index - 1], players[index]] = [players[index], players[index - 1]];
     } else if (direction === 'down' && index < players.length - 1) {
@@ -378,23 +345,22 @@ function App() {
       return;
     }
 
-    setLoading(true); // Set loading state
-    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    setLoading(true);
+    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     try {
       const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
-      await updateDoc(competitionRef, { players: players }); // Update Firestore with new order
-      setError(null); // Clear errors
+      await updateDoc(competitionRef, { players: players });
+      setError(null);
     } catch (err: any) {
       console.error("Error reordering players:", err);
       setError(`Failed to reorder players: ${err.message}`);
     } finally {
-      setLoading(false); // Clear loading state
+      setLoading(false);
     }
   };
 
   // Function to start the fantasy draft
   const startDraft = async () => {
-    // Validate permissions and competition status
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId) {
       setError("Only the competition creator can start the draft.");
       return;
@@ -408,41 +374,38 @@ function App() {
       return;
     }
 
-    setLoading(true); // Set loading state
-    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    setLoading(true);
+    const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     try {
       const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
-      const roundsPerPlayer = WEIGHT_CLASSES.length + 1; // 1 for each weight class + 1 flex slot
-      const draftOrder = generateSnakeDraftOrder(currentCompetition.players, roundsPerPlayer); // Generate snake draft order
+      const roundsPerPlayer = WEIGHT_CLASSES.length + 1;
+      const draftOrder = generateSnakeDraftOrder(currentCompetition.players, roundsPerPlayer);
 
-      // Initialize an empty object to store drafted fighters for each player
       const initialDraftedFighters: { [key: string]: { [key: string]: any } } = {};
       currentCompetition.players.forEach((pId: string) => {
         initialDraftedFighters[pId] = {};
       });
 
-      // Update Firestore to start the draft
       await updateDoc(competitionRef, {
-        status: 'in_progress', // Set status to in_progress
-        draftOrder: draftOrder, // Store the generated draft order
-        currentPickIndex: 0, // Start from the first pick
-        currentPickerId: draftOrder[0], // Set the first picker
-        currentPickStartTime: Date.now(), // Record start time for timer
-        draftedFighters: initialDraftedFighters, // Initialize drafted fighters structure
+        status: 'in_progress',
+        draftOrder: draftOrder,
+        currentPickIndex: 0,
+        currentPickerId: draftOrder[0],
+        currentPickStartTime: Date.now(),
+        draftedFighters: initialDraftedFighters,
       });
-      setError(null); // Clear errors
-      setMessage("Draft has started!"); // Success message
+      setError(null);
+      setMessage("Draft has started!");
     } catch (err: any) {
       console.error("Error starting draft:", err);
       setError(`Failed to start draft: ${err.message}`);
     } finally {
-      setLoading(false); // Clear loading state
+      setLoading(false);
     }
   };
 
   // Function to handle a player making a draft pick
   const makePick = async (fighter: any) => {
-    // Validate turn and draft status
     if (!db || !currentCompetition || currentCompetition.currentPickerId !== userId) {
       setError("It's not your turn to pick.");
       return;
@@ -496,7 +459,7 @@ function App() {
 
       const updatedDraftedFighters = {
         ...(currentCompetition.draftedFighters || {}),
-        [userId as string]: { // Explicitly cast userId to string
+        [userId as string]: {
           ...playerDraftedFighters,
           [assignedSlot]: pickedFighterData
         }
@@ -536,7 +499,6 @@ function App() {
     }
   }, [currentCompetition, allFighters]);
 
-  // Memoized function to get fighters available for the current user's pick
   const getMyAvailablePicks = useCallback(() => {
     if (!currentCompetition || !userId || currentCompetition.currentPickerId !== userId || allFighters.length === 0) return [];
 
