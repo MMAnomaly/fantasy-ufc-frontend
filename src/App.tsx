@@ -1,27 +1,29 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, updateDoc, arrayUnion } from 'firebase/firestore';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, User } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, updateDoc, arrayUnion, Firestore } from 'firebase/firestore';
 
-// Global variables provided by the Canvas environment
+// Global variables provided by the Canvas environment (these are for the platform's internal use)
 declare const __app_id: string | undefined;
 declare const __firebase_config: string | undefined;
 declare const __initial_auth_token: string | undefined;
 
 // Define the base URL for your backend service
-// IMPORTANT: During local development, this should be 'http://127.0.0.1:5000'.
-// When you deploy your React app to a public host (Netlify/Vercel),
-// you MUST update this URL to the public URL of your DEPLOYED Flask backend.
-const BACKEND_URL = 'https://ufc-backend-api-1038505217453.us-central1.run.app';
+// IMPORTANT: During local development (running 'npm run dev' and 'python app.py' locally),
+// this should be 'http://127.0.0.1:5000'.
+// When you deploy your React app to a public host (like Netlify),
+// you MUST update this URL to the public URL of your DEPLOYED Flask backend on Google Cloud Run.
+// Example: const BACKEND_URL = 'https://your-ufc-backend-api-xxxxxx-uc.a.run.app';
+const BACKEND_URL = 'https://ufc-backend-api-1038505217453.us-central1.run.app/'; // <--- REMEMBER TO REPLACE THIS URL BEFORE DEPLOYING TO NETLIFY!
 
-// All 11 official UFC weight classes
+// All 11 official UFC weight classes as per UFC standards
 const WEIGHT_CLASSES = [
   'Heavyweight', 'Light Heavyweight', 'Middleweight', 'Welterweight',
   'Lightweight', 'Featherweight', 'Bantamweight', 'Flyweight',
   'W.Bantamweight', 'W.Flyweight', 'W.Strawweight'
 ];
 
-// DraftKings Scoring System (for display)
+// DraftKings Fantasy Sports MMA Classic Scoring System
 const DRAFTKINGS_SCORING = {
   "Moves": {
     "Strikes": "+0.2 Pts",
@@ -43,40 +45,47 @@ const DRAFTKINGS_SCORING = {
 };
 
 function App() {
-  const [app, setApp] = useState<any>(null);
-  const [db, setDb] = useState<any>(null);
-  const [auth, setAuth] = useState<any>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState<string>('');
-  const [competitionName, setCompetitionName] = useState<string>('');
-  const [currentCompetition, setCurrentCompetition] = useState<any>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null); // For general messages
-  const [searchQuery, setSearchQuery] = useState<string>(''); // For fighter search
-  const [allFighters, setAllFighters] = useState<any[]>([]); // State to store fetched fighters
+  // State variables for Firebase, user, competition, and UI elements
+  const [app, setApp] = useState<any | null>(null); // Firebase app instance
+  const [db, setDb] = useState<Firestore | null>(null); // Firestore instance
+  const [auth, setAuth] = useState<any | null>(null); // Firebase Auth instance
+  const [userId, setUserId] = useState<string | null>(null); // Current user's ID
+  const [displayName, setDisplayName] = useState<string>(''); // User's display name
+  const [competitionName, setCompetitionName] = useState<string>(''); // Input for new/joining competition
+  const [currentCompetition, setCurrentCompetition] = useState<any | null>(null); // Active competition details
+  const [loading, setLoading] = useState<boolean>(true); // Overall loading state
+  const [error, setError] = useState<string | null>(null); // Error messages
+  const [message, setMessage] = useState<string | null>(null); // Info/success messages
+  const [searchQuery, setSearchQuery] = useState<string>(''); // Search input for fighters
+  const [allFighters, setAllFighters] = useState<any[]>([]); // List of all fighters from backend
 
-  // Timer state for the draft
-  const [timeLeft, setTimeLeft] = useState<number>(180); // Default 3 minutes
-  const timerRef = useRef<number | null>(null);
+  // State for draft timer
+  const [timeLeft, setTimeLeft] = useState<number>(180); // Time left for current pick (3 minutes default)
+  const timerRef = useRef<number | null>(null); // Ref to hold the timer interval ID
 
-  // Initialize Firebase and set up authentication
+  // Effect to initialize Firebase and handle user authentication state
   useEffect(() => {
     try {
+      // Safely get app_id and firebase_config from global variables or use defaults
       const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
       const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 
+      // Initialize Firebase services
       const firebaseApp = initializeApp(firebaseConfig);
       const firestoreDb = getFirestore(firebaseApp);
       const firebaseAuth = getAuth(firebaseApp);
 
+      // Store initialized services in state
       setApp(firebaseApp);
       setDb(firestoreDb);
       setAuth(firebaseAuth);
 
-      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+      // Set up authentication state listener
+      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user: User | null) => {
         if (user) {
+          // If user is logged in, set their ID
           setUserId(user.uid);
+          // Try to fetch existing display name or set a default
           const userDocRef = doc(firestoreDb, 'artifacts', appId, 'users', user.uid);
           const userDocSnap = await getDoc(userDocRef);
           if (userDocSnap.exists()) {
@@ -86,9 +95,8 @@ function App() {
             await setDoc(userDocRef, { displayName: defaultName }, { merge: true });
             setDisplayName(defaultName);
           }
-          // Only set loading to false after both Firebase and fighter data are loaded
-          // We will manage overall loading with a combined check
         } else {
+          // If no user, try to sign in with custom token (if provided by Canvas) or anonymously
           if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
             await signInWithCustomToken(firebaseAuth, __initial_auth_token);
           } else {
@@ -97,104 +105,123 @@ function App() {
         }
       });
 
+      // Cleanup function for the auth state listener
       return () => unsubscribe();
 
     } catch (err: any) {
+      // Catch and display any errors during Firebase initialization or authentication
       console.error("Firebase initialization or authentication failed:", err);
       setError(`Failed to initialize Firebase: ${err.message}`);
       setLoading(false);
     }
-  }, []);
+  }, []); // Empty dependency array ensures this runs only once on component mount
 
-  // Fetch fighters from backend
+  // Effect to fetch fighters from the backend API
   useEffect(() => {
     const fetchFighters = async () => {
       try {
-        setLoading(true); // Indicate loading for fighter data
-        const response = await fetch(`${BACKEND_URL}/fighters`);
+        setLoading(true); // Set loading state while fetching
+        const response = await fetch(`${BACKEND_URL}/fighters`); // Fetch from backend URL
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const data = await response.json();
-        setAllFighters(data);
-        setError(null);
+        const data = await response.json(); // Parse JSON response
+        setAllFighters(data); // Store fetched fighters in state
+        setError(null); // Clear any previous errors
       } catch (err: any) {
         console.error("Failed to fetch fighters:", err);
+        // Display error if fetching fails, guiding user to check backend
         setError(`Failed to load fighter data from backend: ${err.message}. Please ensure the Python backend is running.`);
       } finally {
-        setLoading(false); // Done loading fighter data
+        setLoading(false); // Clear loading state
       }
     };
-    fetchFighters();
-  }, []); // Run only once on component mount
+    fetchFighters(); // Call the fetch function
+  }, []); // Empty dependency array ensures this runs only once on component mount
 
-  // Set up real-time listener for current competition
+  // Effect to set up real-time listener for the current competition from Firestore
   useEffect(() => {
+    // Only proceed if Firestore DB and user ID are available
     if (!db || !userId) return;
 
-    const competitionsRef = collection(db, 'artifacts', __app_id, 'public', 'data', 'competitions');
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
+    // Query Firestore for competitions where the current user is a player
+    const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
     const q = query(competitionsRef, where('players', 'array-contains', userId));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    // Set up real-time snapshot listener
+    const unsubscribe = onSnapshot(q, (snapshot: any) => { // snapshot is typed as any for flexibility
       if (!snapshot.empty) {
-        const compDoc = snapshot.docs[0];
+        // If a competition is found, update currentCompetition state
+        const compDoc = snapshot.docs[0]; // Assuming user is in only one active competition
         setCurrentCompetition({ id: compDoc.id, ...compDoc.data() });
         const data = compDoc.data();
+        // If draft is in progress, sync the timer based on start time
         if (data.status === 'in_progress' && data.currentPickStartTime) {
           const elapsed = Math.floor((Date.now() - data.currentPickStartTime) / 1000);
-          const remaining = Math.max(0, 180 - elapsed);
+          const remaining = Math.max(0, 180 - elapsed); // 180 seconds = 3 minutes
           setTimeLeft(remaining);
         }
       } else {
-        setCurrentCompetition(null);
+        setCurrentCompetition(null); // No active competition found
       }
-    }, (err) => {
+    }, (err: any) => { // Error handler for snapshot listener
       console.error("Error listening to competitions:", err);
       setError(`Failed to load competitions: ${err.message}`);
     });
 
+    // Cleanup function for the snapshot listener
     return () => unsubscribe();
-  }, [db, userId]);
+  }, [db, userId]); // Re-run if db or userId changes
 
-  // Draft timer effect
+  // Effect to manage the draft countdown timer
   useEffect(() => {
+    // Only run timer if draft is in progress and it's the current user's turn
     if (currentCompetition?.status === 'in_progress' && currentCompetition?.currentPickerId === userId) {
+      // Clear any existing timer to prevent multiple intervals
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
+      // Set a new interval to decrement time every second
       timerRef.current = window.setInterval(() => {
         setTimeLeft((prevTime) => {
           if (prevTime <= 1) {
-            clearInterval(timerRef.current!);
+            clearInterval(timerRef.current!); // Stop timer when it reaches 0
+            // TODO: Implement auto-skip or random pick logic here
             return 0;
           }
-          return prevTime - 1;
+          return prevTime - 1; // Decrement time
         });
       }, 1000);
     } else {
+      // Clear timer if draft is not in progress or it's not user's turn
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     }
+    // Cleanup function for the timer interval
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     };
-  }, [currentCompetition, userId]);
+  }, [currentCompetition, userId]); // Re-run if competition state or user ID changes
 
-  // Handle display name change
+  // Handler for changing the user's display name
   const handleDisplayNameChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const newName = e.target.value;
-    setDisplayName(newName);
-    if (db && userId) {
+    setDisplayName(newName); // Update local state immediately
+    if (db && userId) { // Ensure db and userId are available
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
       try {
-        const userDocRef = doc(db, 'artifacts', __app_id, 'users', userId);
+        // Update user's display name in their private user document
+        const userDocRef = doc(db, 'artifacts', appId, 'users', userId);
         await setDoc(userDocRef, { displayName: newName }, { merge: true });
-        if (currentCompetition && currentCompetition.playerNames[userId]) {
-          const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+        // If part of a competition, also update their display name in the competition document
+        if (currentCompetition && currentCompetition.playerNames && userId) {
+          const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
           await updateDoc(competitionRef, {
-            [`playerNames.${userId}`]: newName
+            [`playerNames.${userId}`]: newName // Use computed property name for dynamic key
           });
         }
       } catch (err: any) {
@@ -204,21 +231,24 @@ function App() {
     }
   };
 
-  // Create a new competition
+  // Function to create a new fantasy competition
   const createCompetition = async () => {
+    // Validate inputs
     if (!db || !userId || !competitionName.trim()) {
       setError("Please enter a competition name and ensure you are authenticated.");
       return;
     }
-    setLoading(true);
+    setLoading(true); // Set loading state
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
     try {
-      const competitionsRef = collection(db, 'artifacts', __app_id, 'public', 'data', 'competitions');
-      const newCompetitionRef = doc(competitionsRef);
+      // Create a new competition document in Firestore
+      const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
+      const newCompetitionRef = doc(competitionsRef); // Firestore generates unique ID
       await setDoc(newCompetitionRef, {
         name: competitionName.trim(),
-        players: [userId],
-        playerNames: { [userId]: displayName },
-        status: 'setup',
+        players: [userId], // Add creator as first player
+        playerNames: { [userId]: displayName }, // Map player ID to display name
+        status: 'setup', // Initial status
         createdAt: Date.now(),
         draftOrder: [],
         currentPickIndex: 0,
@@ -226,74 +256,80 @@ function App() {
         currentPickStartTime: null,
         draftedFighters: {},
         scores: {},
-        creatorId: userId
+        creatorId: userId // Store creator's ID
       });
-      setCompetitionName('');
-      setError(null);
+      setCompetitionName(''); // Clear input field
+      setError(null); // Clear errors
       setMessage(`Competition "${competitionName.trim()}" created! Share the Competition ID above to invite others.`);
     } catch (err: any) {
       console.error("Error creating competition:", err);
       setError(`Failed to create competition: ${err.message}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // Clear loading state
     }
   };
 
-  // Join an existing competition
+  // Function to join an existing fantasy competition
   const joinCompetition = async () => {
+    // Validate inputs
     if (!db || !userId || !competitionName.trim()) {
       setError("Please enter a competition ID and ensure you are authenticated.");
       return;
     }
-    setLoading(true);
+    setLoading(true); // Set loading state
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', competitionName.trim());
+      // Get the competition document by ID
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', competitionName.trim());
       const compDocSnap = await getDoc(competitionRef);
 
       if (compDocSnap.exists()) {
         const compData = compDocSnap.data();
+        // Prevent joining if draft has already started
         if (compData.status !== 'setup') {
           setError("Cannot join: Draft has already started or completed for this competition.");
           setLoading(false);
           return;
         }
+        // Add current user to players array if not already present
         if (!compData.players.includes(userId)) {
           await updateDoc(competitionRef, {
-            players: arrayUnion(userId),
-            [`playerNames.${userId}`]: displayName
+            players: arrayUnion(userId), // Atomically add user ID to array
+            [`playerNames.${userId}`]: displayName // Add display name mapping
           });
           setMessage(`Successfully joined competition "${compData.name}"!`);
         } else {
           setMessage(`You are already in competition "${compData.name}".`);
         }
-        setCompetitionName('');
-        setError(null);
+        setCompetitionName(''); // Clear input
+        setError(null); // Clear errors
       } else {
-        setError("Competition not found. Please check the ID.");
+        setError("Competition not found. Please check the ID."); // Competition not found
       }
     } catch (err: any) {
       console.error("Error joining competition:", err);
       setError(`Failed to join competition: ${err.message}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // Clear loading state
     }
   };
 
-  // Function to generate snake draft order
+  // Helper function to generate snake draft order
   const generateSnakeDraftOrder = useCallback((players: string[], rounds: number) => {
     let order: string[] = [];
     for (let i = 0; i < rounds; i++) {
       if (i % 2 === 0) {
-        order = order.concat(players);
+        order = order.concat(players); // Forward order
       } else {
-        order = order.concat([...players].reverse());
+        order = order.concat([...players].reverse()); // Reverse order
       }
     }
     return order;
-  }, []);
+  }, []); // Memoize function
 
-  // Shuffle player order for draft
+  // Function to shuffle player order (only for creator in setup phase)
   const shufflePlayers = async () => {
+    // Validate permissions and competition status
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId) {
       setError("Only the competition creator can shuffle players.");
       return;
@@ -303,58 +339,62 @@ function App() {
       return;
     }
 
-    setLoading(true);
+    setLoading(true); // Set loading state
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
-      const shuffledPlayers = [...currentCompetition.players].sort(() => Math.random() - 0.5);
-      await updateDoc(competitionRef, { players: shuffledPlayers });
-      setMessage("Player order shuffled!");
-      setError(null);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
+      const shuffledPlayers = [...currentCompetition.players].sort(() => Math.random() - 0.5); // Shuffle array
+      await updateDoc(competitionRef, { players: shuffledPlayers }); // Update Firestore
+      setMessage("Player order shuffled!"); // Success message
+      setError(null); // Clear errors
     }
     catch (err: any) {
       console.error("Error shuffling players:", err);
       setError(`Failed to shuffle players: ${err.message}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // Clear loading state
     }
   };
 
-  // Move player up/down in the list (for creator to manually set order)
+  // Function to manually move a player's position in the draft order (creator only)
   const movePlayer = async (playerToMoveId: string, direction: 'up' | 'down') => {
+    // Validate permissions and competition status
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId || currentCompetition.status !== 'setup') {
       setError("Only the competition creator can reorder players in setup phase.");
       return;
     }
 
-    const players = [...currentCompetition.players];
-    const index = players.indexOf(playerToMoveId);
+    const players = [...currentCompetition.players]; // Create a mutable copy of players array
+    const index = players.indexOf(playerToMoveId); // Find index of player to move
 
-    if (index === -1) return;
+    if (index === -1) return; // Player not found
 
+    // Perform the swap based on direction
     if (direction === 'up' && index > 0) {
       [players[index - 1], players[index]] = [players[index], players[index - 1]];
     } else if (direction === 'down' && index < players.length - 1) {
       [players[index + 1], players[index]] = [players[index], players[index + 1]];
     } else {
-      return; // Can't move further up or down
+      return; // Cannot move further up or down
     }
 
-    setLoading(true);
+    setLoading(true); // Set loading state
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
-      await updateDoc(competitionRef, { players: players });
-      setError(null);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
+      await updateDoc(competitionRef, { players: players }); // Update Firestore with new order
+      setError(null); // Clear errors
     } catch (err: any) {
       console.error("Error reordering players:", err);
       setError(`Failed to reorder players: ${err.message}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // Clear loading state
     }
   };
 
-
-  // Start the draft
+  // Function to start the fantasy draft
   const startDraft = async () => {
+    // Validate permissions and competition status
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId) {
       setError("Only the competition creator can start the draft.");
       return;
@@ -368,38 +408,41 @@ function App() {
       return;
     }
 
-    setLoading(true);
+    setLoading(true); // Set loading state
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
-      const roundsPerPlayer = WEIGHT_CLASSES.length + 1; // 1 for each weight class + 1 for flex
-      const draftOrder = generateSnakeDraftOrder(currentCompetition.players, roundsPerPlayer);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
+      const roundsPerPlayer = WEIGHT_CLASSES.length + 1; // 1 per weight class + 1 flex slot
+      const draftOrder = generateSnakeDraftOrder(currentCompetition.players, roundsPerPlayer); // Generate snake draft order
 
-      // Initialize drafted fighters for each player
+      // Initialize an empty object to store drafted fighters for each player
       const initialDraftedFighters: { [key: string]: { [key: string]: any } } = {};
       currentCompetition.players.forEach((pId: string) => {
         initialDraftedFighters[pId] = {};
       });
 
+      // Update Firestore to start the draft
       await updateDoc(competitionRef, {
-        status: 'in_progress',
-        draftOrder: draftOrder,
-        currentPickIndex: 0,
-        currentPickerId: draftOrder[0],
-        currentPickStartTime: Date.now(),
-        draftedFighters: initialDraftedFighters,
+        status: 'in_progress', // Set status to in_progress
+        draftOrder: draftOrder, // Store the generated draft order
+        currentPickIndex: 0, // Start from the first pick
+        currentPickerId: draftOrder[0], // Set the first picker
+        currentPickStartTime: Date.now(), // Record start time for timer
+        draftedFighters: initialDraftedFighters, // Initialize drafted fighters structure
       });
-      setError(null);
-      setMessage("Draft has started!");
+      setError(null); // Clear errors
+      setMessage("Draft has started!"); // Success message
     } catch (err: any) {
       console.error("Error starting draft:", err);
       setError(`Failed to start draft: ${err.message}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // Clear loading state
     }
   };
 
-  // Make a draft pick
+  // Function to handle a player making a draft pick
   const makePick = async (fighter: any) => {
+    // Validate turn and draft status
     if (!db || !currentCompetition || currentCompetition.currentPickerId !== userId) {
       setError("It's not your turn to pick.");
       return;
@@ -409,142 +452,155 @@ function App() {
       return;
     }
 
-    const playerDraftedFighters = currentCompetition.draftedFighters[userId] || {};
-    const hasFlexPicked = !!playerDraftedFighters['Flex'];
-    const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length;
+    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {}; // Get current player's drafted fighters with optional chaining
+    const hasFlexPicked = !!playerDraftedFighters['Flex']; // Check if flex slot is filled
+    const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length; // Count specific WC picks
 
-    let assignedSlot: string | null = null;
+    let assignedSlot: string | null = null; // Slot where the fighter will be assigned
+    // Prepare fighter data including opponent and fight date
     let pickedFighterData = { id: fighter.id, name: fighter.name, weightClass: fighter.weightClass, imageUrl: fighter.imageUrl, opponent: fighter.opponent, fightDate: fighter.fightDate };
 
-    // Check if player already has this specific fighter drafted
+    // Prevent drafting the same fighter twice by the same player
     if (Object.values(playerDraftedFighters).some((f: any) => f.id === fighter.id)) {
       setError("You have already drafted this fighter.");
       return;
     }
 
-    // Check if this fighter's specific weight class slot is available for a direct pick
+    // Determine if the fighter's specific weight class slot is available
     const isWeightClassSlotAvailable = !playerDraftedFighters[fighter.weightClass] && WEIGHT_CLASSES.includes(fighter.weightClass);
 
+    // Logic to assign fighter to a slot: prioritize specific weight class, then flex
     if (isWeightClassSlotAvailable && weightClassPicksCount < WEIGHT_CLASSES.length) {
-        // Prioritize filling the specific weight class slot
         assignedSlot = fighter.weightClass;
     } else if (!hasFlexPicked) {
-        // If the specific weight class slot is taken OR all specific weight class slots are filled,
-        // and the flex slot is open, assign to Flex.
         assignedSlot = 'Flex';
     } else {
         setError("You have already picked a fighter for this weight class or your Flex slot is full.");
         return;
     }
 
-    if (!assignedSlot) {
+    if (!assignedSlot) { // Should not happen if logic is correct
       setError("Could not assign fighter to a slot. This shouldn't happen.");
       return;
     }
 
-    // Check if fighter is already drafted by anyone across the entire competition
-    const allDraftedFighterIds = getUndraftedFighters(true); // true to get ALL drafted IDs
+    // Prevent drafting a fighter already picked by ANY player in the competition
+    const allDraftedFighterIds = getUndraftedFighters(true); // Get IDs of all drafted fighters
     if (allDraftedFighterIds.includes(fighter.id)) {
       setError("This fighter has already been drafted by another player.");
       return;
     }
 
-    setLoading(true);
+    setLoading(true); // Set loading state
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Safely get appId
     try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
+      const competitionRef = doc(db, 'artifacts', appId, 'public', 'data', 'competitions', currentCompetition.id);
       const nextPickIndex = currentCompetition.currentPickIndex + 1;
       const nextPickerId = currentCompetition.draftOrder[nextPickIndex];
+      // Determine new competition status (completed if all picks are made)
       const newStatus = nextPickIndex >= currentCompetition.draftOrder.length ? 'completed' : 'in_progress';
 
-      // Update drafted fighters for the current player
+      // Update the drafted fighters object in Firestore
       const updatedDraftedFighters = {
-        ...currentCompetition.draftedFighters,
-        [userId]: {
+        ...(currentCompetition.draftedFighters || {}), // Ensure it's an object, even if null/undefined
+        [userId!]: { // Use non-null assertion '!' as userId is guaranteed by 'if (!db || !currentCompetition || currentCompetition.currentPickerId !== userId)' check
           ...playerDraftedFighters,
-          [assignedSlot]: pickedFighterData // Store the fighter object
+          [assignedSlot]: pickedFighterData // Assign fighter to the determined slot
         }
       };
 
+      // Update the competition document in Firestore
       await updateDoc(competitionRef, {
         draftedFighters: updatedDraftedFighters,
         currentPickIndex: nextPickIndex,
-        currentPickerId: nextPickerId || null, // Null if draft completed
-        currentPickStartTime: newStatus === 'in_progress' ? Date.now() : null,
-        status: newStatus,
+        currentPickerId: nextPickerId || null, // Set next picker or null if draft completed
+        currentPickStartTime: newStatus === 'in_progress' ? Date.now() : null, // Reset timer start time
+        status: newStatus, // Update competition status
       });
 
-      setTimeLeft(180); // Reset timer for next pick
-      setError(null);
-      setMessage(`You drafted ${fighter.name} into your ${assignedSlot} slot!`);
+      setTimeLeft(180); // Reset timer for the next pick
+      setError(null); // Clear errors
+      setMessage(`You drafted ${fighter.name} into your ${assignedSlot} slot!`); // Success message
     } catch (err: any) {
       console.error("Error making pick:", err);
       setError(`Failed to make pick: ${err.message}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // Clear loading state
     }
   };
 
-  // Returns true for all drafted fighter IDs, or false for available fighters
+  // Memoized function to get a list of undrafted fighters or all drafted fighter IDs
   const getUndraftedFighters = useCallback((returnDraftedIds: boolean = false) => {
-    if (!currentCompetition || allFighters.length === 0) return []; // Ensure allFighters is loaded
+    // Return empty array if competition or fighters data is not loaded
+    if (!currentCompetition || allFighters.length === 0) return [];
 
-    const allDraftedFighterIds = Object.values(currentCompetition.draftedFighters)
+    // Flatten all drafted fighters from all players into a single array of IDs
+    const allDraftedFighterIds = Object.values(currentCompetition.draftedFighters || {}) // Ensure it's an object
                                       .flatMap((playerPicks: any) => Object.values(playerPicks))
                                       .map((f: any) => f.id);
 
     if (returnDraftedIds) {
-      return allDraftedFighterIds;
+      return allDraftedFighterIds; // Return only the IDs of drafted fighters
     } else {
+      // Return fighters from the master list that are NOT in the drafted IDs list
       return allFighters.filter(fighter => !allDraftedFighterIds.includes(fighter.id));
     }
-  }, [currentCompetition, allFighters]);
+  }, [currentCompetition, allFighters]); // Re-run if competition or allFighters data changes
 
+  // Memoized function to get fighters available for the current user's pick
   const getMyAvailablePicks = useCallback(() => {
+    // Return empty array if conditions for picking are not met
     if (!currentCompetition || !userId || currentCompetition.currentPickerId !== userId || allFighters.length === 0) return [];
 
-    const playerDraftedFighters = currentCompetition.draftedFighters[userId] || {};
-    const playerPickedWeightClasses = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex');
+    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {}; // Current player's drafted fighters
+    const playerPickedWeightClasses = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex'); // Specific weight classes picked
 
-    const availableSpecificSlots = WEIGHT_CLASSES.filter(wc => !playerPickedWeightClasses.includes(wc));
-    const flexSlotOpen = !playerDraftedFighters['Flex'];
-    const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length;
-    const requiredSpecificPicksRemaining = WEIGHT_CLASSES.length - weightClassPicksCount;
+    const availableSpecificSlots = WEIGHT_CLASSES.filter(wc => !playerPickedWeightClasses.includes(wc)); // Weight classes not yet filled
+    const flexSlotOpen = !playerDraftedFighters['Flex']; // Check if flex slot is open
+    const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length; // Count of specific WC picks
+    const requiredSpecificPicksRemaining = WEIGHT_CLASSES.length - weightClassPicksCount; // How many specific WCs still need to be picked
 
-    const undraftedFighters = getUndraftedFighters();
+    const undraftedFighters = getUndraftedFighters(); // Get all fighters not yet drafted by anyone
 
+    // Filter undrafted fighters based on current player's needs
     return undraftedFighters.filter(fighter => {
+      // If a specific weight class slot is available and this fighter matches it, it's a valid pick
       if (availableSpecificSlots.includes(fighter.weightClass) && !playerDraftedFighters[fighter.weightClass]) {
         return true;
       }
+      // If flex slot is open, and either all specific slots are filled OR this fighter's WC is already taken, allow for flex
       if (flexSlotOpen &&
           (requiredSpecificPicksRemaining === 0 || !availableSpecificSlots.includes(fighter.weightClass))) {
           return true;
       }
-      return false;
+      return false; // Otherwise, not a valid pick for this turn
     });
-  }, [currentCompetition, userId, allFighters, getUndraftedFighters]);
+  }, [currentCompetition, userId, allFighters, getUndraftedFighters]); // Re-run if dependencies change
 
 
+  // Renders the current status of the draft (setup, in progress, completed)
   const renderDraftStatus = () => {
-    if (!currentCompetition) return null;
+    if (!currentCompetition) return null; // Don't render if no competition is active
 
+    // If draft is completed
     if (currentCompetition.status === 'completed') {
       return <p className="text-xl text-green-400 font-bold text-center mt-4">Draft Completed!</p>;
     }
 
+    // If draft is in progress
     if (currentCompetition.status === 'in_progress') {
-      const currentPickerName = currentCompetition.playerNames[currentCompetition.currentPickerId] || 'Unknown Player';
-      const isMyTurn = currentCompetition.currentPickerId === userId;
-      const minutes = Math.floor(timeLeft / 60);
-      const seconds = timeLeft % 60;
+      const currentPickerName = currentCompetition.playerNames?.[currentCompetition.currentPickerId] || 'Unknown Player'; // Get current picker's name
+      const isMyTurn = currentCompetition.currentPickerId === userId; // Check if it's current user's turn
+      const minutes = Math.floor(timeLeft / 60); // Calculate minutes left
+      const seconds = timeLeft % 60; // Calculate seconds left
 
-      const playerDraftedFighters = currentCompetition.draftedFighters[userId] || {};
-      const pickedWeightClasses = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex');
-      const missingWeightClasses = WEIGHT_CLASSES.filter(wc => !pickedWeightClasses.includes(wc));
-      const needsFlex = !playerDraftedFighters['Flex'];
-      const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length;
+      const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {}; // Current player's drafted fighters
+      const pickedWeightClasses = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex'); // Specific weight classes picked
+      const missingWeightClasses = WEIGHT_CLASSES.filter(wc => !pickedWeightClasses.includes(wc)); // Missing specific weight classes
+      const needsFlex = !playerDraftedFighters['Flex']; // Check if flex slot needs to be filled
+      const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length; // Count of specific WC picks
 
-      let nextPickRequirement = '';
+      let nextPickRequirement = ''; // Message for next pick requirement
       if (weightClassPicksCount < WEIGHT_CLASSES.length) {
           nextPickRequirement = `Next: Pick a fighter for one of these weight classes: ${missingWeightClasses.join(', ')}`;
       } else if (needsFlex) {
@@ -553,6 +609,7 @@ function App() {
           nextPickRequirement = `Waiting for other players to pick.`;
       }
 
+      // Determine which fighters to display (available for pick or all undrafted) and filter by search query
       const fightersToDisplay = isMyTurn ? getMyAvailablePicks() : getUndraftedFighters();
       const filteredFighters = fightersToDisplay.filter(fighter =>
         fighter.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -633,7 +690,7 @@ function App() {
               {WEIGHT_CLASSES.map(wc => (
                   <div key={wc} className="bg-gray-600 p-3 rounded-lg shadow-md">
                       <p className="font-bold text-gray-200">{wc}:</p>
-                      {currentCompetition.draftedFighters[userId]?.[wc] ? (
+                      {currentCompetition.draftedFighters?.[userId]?.[wc] ? (
                           <div className="flex items-center space-x-2 mt-1">
                               <img src={currentCompetition.draftedFighters[userId][wc].imageUrl || `https://placehold.co/40x40/555/ffffff?text=${currentCompetition.draftedFighters[userId][wc].name.substring(0,2)}`} alt={currentCompetition.draftedFighters[userId][wc].name} className="w-8 h-8 rounded-full object-cover border-2 border-gray-400"/>
                               <span className="text-white">{currentCompetition.draftedFighters[userId][wc].name}</span>
@@ -645,7 +702,7 @@ function App() {
               ))}
                 <div className="bg-gray-600 p-3 rounded-lg shadow-md">
                     <p className="font-bold text-gray-200">Flex:</p>
-                    {currentCompetition.draftedFighters[userId]?.['Flex'] ? (
+                    {currentCompetition.draftedFighters?.[userId]?.['Flex'] ? (
                         <div className="flex items-center space-x-2 mt-1">
                             <img src={currentCompetition.draftedFighters[userId]['Flex'].imageUrl || `https://placehold.co/40x40/555/ffffff?text=${currentCompetition.draftedFighters[userId]['Flex'].name.substring(0,2)}`} alt={currentCompetition.draftedFighters[userId]['Flex'].name} className="w-8 h-8 rounded-full object-cover border-2 border-gray-400"/>
                             <span className="text-white">{currentCompetition.draftedFighters[userId]['Flex'].name} <span className="text-sm text-gray-300">({currentCompetition.draftedFighters[userId]['Flex'].weightClass})</span></span>
@@ -655,205 +712,6 @@ function App() {
                     )}
                 </div>
             </div>
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
-
-
-  if (loading || !allFighters.length) { // Check both Firebase auth and fighter data loading
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <p className="text-xl text-gray-700">
-          {error ? error : "Loading app and fighter data. Please ensure your Python backend is running on port 5000..."}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 text-white font-inter p-4 sm:p-6 md:p-8">
-      <script src="https://cdn.tailwindcss.com"></script>
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
-
-      <style>{`
-        body { font-family: 'Inter', sans-serif; }
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: #4a4a4a;
-            border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
-      `}</style>
-
-      <div className="max-w-4xl mx-auto bg-gray-800 rounded-xl shadow-lg p-6 sm:p-8 md:p-10 border border-gray-700">
-        <h1 className="text-3xl sm:text-4xl font-bold text-center mb-6 text-orange-400">
-          Fantasy UFC Competition
-        </h1>
-
-        {error && (
-          <div className="bg-red-600 p-3 rounded-lg mb-4 text-center">
-            <p className="font-semibold">{error}</p>
-          </div>
-        )}
-        {message && (
-          <div className="bg-blue-600 p-3 rounded-lg mb-4 text-center">
-            <p className="font-semibold">{message}</p>
-          </div>
-        )}
-
-        <div className="mb-6 bg-gray-700 p-4 rounded-lg">
-          <h2 className="text-xl font-semibold mb-2">Your Profile</h2>
-          <p className="text-sm text-gray-300 mb-2">Your User ID (share this for others to find you):</p>
-          <div className="bg-gray-600 p-2 rounded-md text-sm break-all mb-3 shadow-inner border border-gray-500">
-            {userId}
-          </div>
-          <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-1">
-            Display Name:
-          </label>
-          <input
-            id="displayName"
-            type="text"
-            value={displayName}
-            onChange={handleDisplayNameChange}
-            className="w-full p-2 bg-gray-600 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 border border-gray-500"
-            placeholder="Enter your display name"
-          />
-        </div>
-
-        {!currentCompetition ? (
-          <div className="mt-8">
-            <h2 className="text-xl sm:text-2xl font-semibold text-center mb-4 text-orange-300">
-              Create or Join a Competition
-            </h2>
-            <div className="flex flex-col sm:flex-row gap-4 mb-4">
-              <input
-                type="text"
-                value={competitionName}
-                onChange={(e) => setCompetitionName(e.target.value)}
-                className="flex-grow p-3 bg-gray-700 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 border border-gray-600 shadow-md"
-                placeholder="Enter Competition Name or ID"
-              />
-              <button
-                onClick={createCompetition}
-                className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transform transition duration-200 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-2 focus:ring-offset-gray-800"
-              >
-                Create New
-              </button>
-              <button
-                onClick={joinCompetition}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transform transition duration-200 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-gray-800"
-              >
-                Join Existing
-              </button>
-            </div>
-            <p className="text-sm text-gray-400 text-center">
-              To join, paste the Competition ID provided by the creator into the input field and click "Join Existing".
-            </p>
-          </div>
-        ) : (
-          <div className="mt-8 p-6 bg-gray-700 rounded-xl shadow-lg border border-gray-600">
-            <h2 className="text-2xl sm:text-3xl font-bold text-center mb-4 text-orange-300">
-              Competition: {currentCompetition.name}
-            </h2>
-            <p className="text-sm text-gray-300 text-center mb-4">
-              Competition ID: <span className="font-mono bg-gray-600 p-1 rounded text-xs">{currentCompetition.id}</span>
-            </p>
-
-            <div className="mb-6">
-              <h3 className="text-xl font-semibold mb-3 text-orange-200">Players ({currentCompetition.players?.length || 0})</h3>
-              <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {currentCompetition.players && currentCompetition.players.map((pId: string, index: number) => (
-                  <li key={pId} className="bg-gray-600 p-3 rounded-lg shadow-md text-sm flex items-center justify-between">
-                    <span className="text-white">
-                      {currentCompetition.playerNames?.[pId] || `Unknown Player (${pId.substring(0, 6)}...)`}
-                    </span>
-                    <div className="flex items-center space-x-2">
-                        {pId === userId && <span className="px-2 py-1 bg-blue-500 text-white text-xs rounded-full">You</span>}
-                        {currentCompetition.creatorId === pId && <span className="px-2 py-1 bg-yellow-500 text-gray-900 text-xs rounded-full">Creator</span>}
-                        {currentCompetition.status === 'setup' && currentCompetition.creatorId === userId && (
-                            <>
-                                {index > 0 && (
-                                    <button
-                                        onClick={() => movePlayer(pId, 'up')}
-                                        className="bg-gray-500 hover:bg-gray-400 text-white p-1 rounded-full text-xs"
-                                        title="Move Up"
-                                    >
-                                        &#9650;
-                                    </button>
-                                )}
-                                {index < currentCompetition.players.length - 1 && (
-                                    <button
-                                        onClick={() => movePlayer(pId, 'down')}
-                                        className="bg-gray-500 hover:bg-gray-400 text-white p-1 rounded-full text-xs"
-                                        title="Move Down"
-                                    >
-                                        &#9660;
-                                    </button>
-                                )}
-                            </>
-                        )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {currentCompetition.status === 'setup' && currentCompetition.creatorId === userId && (
-                <div className="mt-4 text-center">
-                  <button
-                    onClick={shufflePlayers}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transform transition duration-200 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-gray-800"
-                  >
-                    Shuffle Player Order
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {currentCompetition.status === 'setup' && currentCompetition.creatorId === userId && (
-              <div className="mt-6 text-center">
-                <button
-                  onClick={startDraft}
-                  className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transform transition duration-200 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:ring-offset-2 focus:ring-offset-gray-800"
-                >
-                  Start Draft
-                </button>
-              </div>
-            )}
-
-            {renderDraftStatus()}
-
-            <div className="mt-8 p-6 bg-gray-800 rounded-xl shadow-lg border border-gray-700">
-                <h3 className="text-2xl font-bold text-center mb-4 text-green-400">
-                    DraftKings Fantasy Sports MMA Classic Scoring
-                </h3>
-                {Object.entries(DRAFTKINGS_SCORING).map(([category, rules]) => (
-                    <div key={category} className="mb-4 last:mb-0">
-                        <h4 className="text-xl font-semibold mb-2 text-green-300">{category}</h4>
-                        <ul className="list-disc list-inside text-gray-300">
-                            {Object.entries(rules).map(([rule, points]) => (
-                                <li key={rule} className="mb-1">
-                                    <span className="font-medium">{rule}:</span> {points}
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                ))}
-            </div>
-
-            <div className="mt-8 text-center text-sm text-gray-400">
-                Scores will be calculated based on stats from UFCStats.com once the data is available.
-            </div>
-
           </div>
         )}
       </div>
