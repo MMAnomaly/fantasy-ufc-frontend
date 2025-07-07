@@ -1,3 +1,5 @@
+// src/App.tsx
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, User } from 'firebase/auth';
@@ -564,18 +566,16 @@ function App() {
 
     // Filter undrafted fighters based on current player's needs
     return undraftedFighters.filter(fighter => {
-      // If a specific weight class slot is available and this fighter matches it, it's a valid pick
       if (availableSpecificSlots.includes(fighter.weightClass) && !playerDraftedFighters[fighter.weightClass]) {
         return true;
       }
-      // If flex slot is open, and either all specific slots are filled OR this fighter's WC is already taken, allow for flex
       if (flexSlotOpen &&
           (requiredSpecificPicksRemaining === 0 || !availableSpecificSlots.includes(fighter.weightClass))) {
           return true;
       }
       return false; // Otherwise, not a valid pick for this turn
     });
-  }, [currentCompetition, userId, allFighters, getUndraftedFighters]); // Re-run if dependencies change
+  }, [currentCompetition, userId, allFighters, getUndraftedFighters]);
 
 
   // Renders the current status of the draft (setup, in progress, completed)
