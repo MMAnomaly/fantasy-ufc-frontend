@@ -1,3 +1,5 @@
+// src/App.tsx
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, User } from 'firebase/auth';
@@ -23,7 +25,7 @@ const WEIGHT_CLASSES = [
   'W.Bantamweight', 'W.Flyweight', 'W.Strawweight'
 ];
 
-// DraftKings Fantasy Sports MMA Classic Scoring System
+// DraftKings Scoring System (for display)
 const DRAFTKINGS_SCORING = {
   "Moves": {
     "Strikes": "+0.2 Pts",
@@ -59,7 +61,6 @@ function App() {
   const [searchQuery, setSearchQuery] = useState<string>(''); // Search input for fighters
   const [allFighters, setAllFighters] = useState<any[]>([]); // List of all fighters from backend
 
-  // State for draft timer
   const [timeLeft, setTimeLeft] = useState<number>(180); // Time left for current pick (3 minutes default)
   const timerRef = useRef<number | null>(null); // Ref to hold the timer interval ID
 
@@ -77,9 +78,9 @@ function App() {
       const firebaseAuth = getAuth(firebaseApp);
 
       // Store initialized services in state
-      setApp(firebaseApp); // 'app' is used here, so TS warning should be gone
+      setApp(firebaseApp);
       setDb(firestoreDb);
-      setAuth(firebaseAuth); // 'auth' is used here, so TS warning should be gone
+      setAuth(firebaseAuth);
 
       // Set up authentication state listener
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user: User | null) => {
@@ -451,7 +452,7 @@ function App() {
       return;
     }
 
-    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {};
+    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId as string] || {};
     const hasFlexPicked = !!playerDraftedFighters['Flex'];
     const weightClassPicksCount = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex').length;
 
@@ -539,7 +540,7 @@ function App() {
   const getMyAvailablePicks = useCallback(() => {
     if (!currentCompetition || !userId || currentCompetition.currentPickerId !== userId || allFighters.length === 0) return [];
 
-    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {};
+    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId as string] || {};
     const playerPickedWeightClasses = Object.keys(playerDraftedFighters).filter(key => key !== 'Flex');
 
     const availableSpecificSlots = WEIGHT_CLASSES.filter(wc => !playerPickedWeightClasses.includes(wc));
@@ -561,7 +562,7 @@ function App() {
     });
   }, [currentCompetition, userId, allFighters, getUndraftedFighters]);
 
-  // Renders the current status of the draft (setup, in progress, completed)
+
   const renderDraftStatus = () => {
     if (!currentCompetition) return null;
 
@@ -672,7 +673,7 @@ function App() {
                       <p className="font-bold text-gray-200">{wc}:</p>
                       {currentCompetition.draftedFighters?.[userId as string]?.[wc] ? (
                           <div className="flex items-center space-x-2 mt-1">
-                              <img src={currentCompetition.draftedFighters[userId as string][wc].imageUrl || `https://placehold.co/40x40/555/ffffff?text=${currentCompetition.draftedFighters[userId as string][wc].name.substring(0,2)}`} alt={currentCompetition.draftedFighters[userId as string][wc].name} className="w-8 h-8 rounded-full object-cover border-2 border-gray-400"/>
+                              <img src={currentCompetition.draftedFighters[userId as string][wc].imageUrl || `https://placehold.co/40x40/555/ffffff?text=${(currentCompetition.draftedFighters[userId as string][wc].name || '?').substring(0,2)}`} alt={currentCompetition.draftedFighters[userId as string][wc].name || 'Fighter'} className="w-8 h-8 rounded-full object-cover border-2 border-gray-400"/>
                               <span className="text-white">{currentCompetition.draftedFighters[userId as string][wc].name}</span>
                           </div>
                       ) : (
@@ -684,7 +685,7 @@ function App() {
                     <p className="font-bold text-gray-200">Flex:</p>
                     {currentCompetition.draftedFighters?.[userId as string]?.['Flex'] ? (
                         <div className="flex items-center space-x-2 mt-1">
-                            <img src={currentCompetition.draftedFighters[userId as string]['Flex'].imageUrl || `https://placehold.co/40x40/555/ffffff?text=${currentCompetition.draftedFighters[userId as string]['Flex'].name.substring(0,2)}`} alt={currentCompetition.draftedFighters[userId as string]['Flex'].name} className="w-8 h-8 rounded-full object-cover border-2 border-gray-400"/>
+                            <img src={currentCompetition.draftedFighters[userId as string]['Flex'].imageUrl || `https://placehold.co/40x40/555/ffffff?text=${(currentCompetition.draftedFighters[userId as string]['Flex'].name || '?').substring(0,2)}`} alt={currentCompetition.draftedFighters[userId as string]['Flex'].name || 'Flex Fighter'} className="w-8 h-8 rounded-full object-cover border-2 border-gray-400"/>
                             <span className="text-white">{currentCompetition.draftedFighters[userId as string]['Flex'].name} <span className="text-sm text-gray-300">({currentCompetition.draftedFighters[userId as string]['Flex'].weightClass})</span></span>
                         </div>
                     ) : (
