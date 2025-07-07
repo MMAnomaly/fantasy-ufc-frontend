@@ -15,7 +15,7 @@ declare const __initial_auth_token: string | undefined;
 // IMPORTANT: During local development, this should be 'http://127.0.0.1:5000'.
 // When you deploy your React app to a public host (Netlify/Vercel),
 // you MUST update this URL to the public URL of your DEPLOYED Flask backend.
-const BACKEND_URL = 'http://127.0.0.1:5000'; // Keep this for local testing, update for deployment!
+const BACKEND_URL = 'https://ufc-backend-api-1038505217453.us-central1.run.app'; // Keep this for local testing, update for deployment!
 
 // All 11 official UFC weight classes
 const WEIGHT_CLASSES = [
