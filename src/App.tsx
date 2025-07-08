@@ -1,9 +1,12 @@
 // src/App.tsx
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { initializeApp, FirebaseApp, FirebaseOptions } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, Auth, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, updateDoc, arrayUnion, Firestore, QuerySnapshot } from 'firebase/firestore';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, updateDoc, arrayUnion } from 'firebase/firestore';
+import type { FirebaseApp, FirebaseOptions } from 'firebase/app';
+import type { Auth, User } from 'firebase/auth';
+import type { Firestore, QuerySnapshot } from 'firebase/firestore';
 
 // Global variables provided by the Canvas environment
 declare const __app_id: string;
@@ -11,7 +14,6 @@ declare const __firebase_config: string;
 declare const __initial_auth_token: string | undefined;
 
 // Define the base URL for the backend service
-// Use environment variables in production
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://ufc-backend-api-1038505217453.us-central1.run.app/';
 
 // All 11 official UFC weight classes
@@ -49,9 +51,7 @@ interface Competition {
 }
 
 const App: React.FC = () => {
-  const [app, setApp] = useState<FirebaseApp | null>(null);
   const [db, setDb] = useState<Firestore | null>(null);
-  const [auth, setAuth] = useState<Auth | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string>('');
   const [competitionName, setCompetitionName] = useState<string>('');
@@ -65,19 +65,25 @@ const App: React.FC = () => {
   const [timeLeft, setTimeLeft] = useState<number>(180);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Log state changes for debugging
+  useEffect(() => {
+    console.log('State:', { userId, currentCompetition, allFighters, loading, error, message });
+  }, [userId, currentCompetition, allFighters, loading, error, message]);
+
   // Initialize Firebase and set up authentication
   useEffect(() => {
     try {
+      console.log('__app_id:', __app_id);
+      console.log('__firebase_config:', JSON.parse(__firebase_config));
       const firebaseConfig: FirebaseOptions = JSON.parse(__firebase_config);
       const firebaseApp = initializeApp(firebaseConfig);
       const firestoreDb = getFirestore(firebaseApp);
       const firebaseAuth = getAuth(firebaseApp);
 
-      setApp(firebaseApp);
       setDb(firestoreDb);
-      setAuth(firebaseAuth);
 
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user: User | null) => {
+        console.log('Auth state:', user ? user.uid : 'No user');
         if (user) {
           setUserId(user.uid);
           const userDocRef = doc(firestoreDb, 'artifacts', __app_id, 'users', user.uid);
@@ -96,11 +102,12 @@ const App: React.FC = () => {
             await signInAnonymously(firebaseAuth);
           }
         }
+        setLoading(false);
       });
 
       return () => unsubscribe();
     } catch (err: unknown) {
-      console.error('Firebase initialization or authentication failed:', err);
+      console.error('Firebase init error:', err);
       setError(`Failed to initialize Firebase: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setLoading(false);
     }
@@ -116,6 +123,7 @@ const App: React.FC = () => {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data: Fighter[] = await response.json();
+        console.log('Fetched fighters:', data);
         setAllFighters(data);
         setError(null);
       } catch (err: unknown) {
@@ -136,12 +144,14 @@ const App: React.FC = () => {
     const q = query(competitionsRef, where('players', 'array-contains', userId));
 
     const unsubscribe = onSnapshot(q, (snapshot: QuerySnapshot) => {
+      console.log('Competitions snapshot:', snapshot.docs.length);
       if (!snapshot.empty) {
         const compDoc = snapshot.docs[0];
-        setCurrentCompetition({ id: compDoc.id, ...compDoc.data() } as Competition);
-        const data = compDoc.data() as Competition;
-        if (data.status === 'in_progress' && data.currentPickStartTime) {
-          const elapsed = Math.floor((Date.now() - data.currentPickStartTime) / 1000);
+        const compData = { id: compDoc.id, ...compDoc.data() } as Competition;
+        console.log('Current competition:', compData);
+        setCurrentCompetition(compData);
+        if (compData.status === 'in_progress' && compData.currentPickStartTime) {
+          const elapsed = Math.floor((Date.now() - compData.currentPickStartTime) / 1000);
           const remaining = Math.max(0, 180 - elapsed);
           setTimeLeft(remaining);
         }
@@ -191,7 +201,7 @@ const App: React.FC = () => {
       try {
         const userDocRef = doc(db, 'artifacts', __app_id, 'users', userId);
         await setDoc(userDocRef, { displayName: newName }, { merge: true });
-        if (currentCompetition && currentCompetition.playerNames && userId) {
+        if (currentCompetition && currentCompetition.playerNames) {
           const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
           await updateDoc(competitionRef, {
             [`playerNames.${userId}`]: newName,
@@ -318,39 +328,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Function to manually move a player's position in the draft order (creator only)
-  const movePlayer = async (playerToMoveId: string, direction: 'up' | 'down'): Promise<void> => {
-    if (!db || !currentCompetition || currentCompetition.creatorId !== userId || currentCompetition.status !== 'setup') {
-      setError('Only the competition creator can reorder players in setup phase.');
-      return;
-    }
-
-    const players = [...currentCompetition.players];
-    const index = players.indexOf(playerToMoveId);
-
-    if (index === -1) return;
-
-    if (direction === 'up' && index > 0) {
-      [players[index - 1], players[index]] = [players[index], players[index - 1]];
-    } else if (direction === 'down' && index < players.length - 1) {
-      [players[index + 1], players[index]] = [players[index], players[index + 1]];
-    } else {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const competitionRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'competitions', currentCompetition.id);
-      await updateDoc(competitionRef, { players });
-      setError(null);
-    } catch (err: unknown) {
-      console.error('Error reordering players:', err);
-      setError(`Failed to reorder players: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Function to start the fantasy draft
   const startDraft = async (): Promise<void> => {
     if (!db || !currentCompetition || currentCompetition.creatorId !== userId) {
@@ -397,7 +374,7 @@ const App: React.FC = () => {
 
   // Function to handle a player making a draft pick
   const makePick = async (fighter: Fighter): Promise<void> => {
-    if (!db || !currentCompetition || currentCompetition.currentPickerId !== userId) {
+    if (!db || !currentCompetition || currentCompetition.currentPickerId !== userId || !userId) {
       setError("It's not your turn to pick.");
       return;
     }
@@ -406,7 +383,7 @@ const App: React.FC = () => {
       return;
     }
 
-    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {};
+    const playerDraftedFighters = currentCompetition.draftedFighters[userId] || {};
     const hasFlexPicked = !!playerDraftedFighters['Flex'];
     const weightClassPicksCount = Object.keys(playerDraftedFighters).filter((key) => key !== 'Flex').length;
 
@@ -421,7 +398,7 @@ const App: React.FC = () => {
       hasScheduledBout: fighter.hasScheduledBout,
     };
 
-    if (Object.values(playerDraftedFighters).some((f) => f.id === fighter.id)) {
+    if (Object.values(playerDraftedFighters).some((f: Fighter) => f.id === fighter.id)) {
       setError('You have already drafted this fighter.');
       return;
     }
@@ -442,7 +419,7 @@ const App: React.FC = () => {
       return;
     }
 
-    const allDraftedFighterIds = getUndraftedFighters(true);
+    const allDraftedFighterIds = getUndraftedFighters(true) as string[];
     if (allDraftedFighterIds.includes(fighter.id)) {
       setError('This fighter has already been drafted by another player.');
       return;
@@ -484,26 +461,27 @@ const App: React.FC = () => {
 
   // Memoized function to get a list of undrafted fighters or all drafted fighter IDs
   const getUndraftedFighters = useCallback(
-    (returnDraftedIds: boolean = false): string[] | Fighter[] => {
+    (returnDraftedIds: boolean = false): Fighter[] | string[] => {
       if (!currentCompetition || allFighters.length === 0) return [];
 
-      const allDraftedFighterIds = Object.values(currentCompetition.draftedFighters || {})
+      const allDraftedFighterIds = Object.values(currentCompetition.draftedFighters)
         .flatMap((playerPicks) => Object.values(playerPicks))
-        .map((f) => f.id);
+        .map((f: Fighter) => f.id);
 
       if (returnDraftedIds) {
         return allDraftedFighterIds;
-      } else {
-        return allFighters.filter((fighter) => !allDraftedFighterIds.includes(fighter.id));
       }
+      return allFighters.filter((fighter) => !allDraftedFighterIds.includes(fighter.id));
     },
     [currentCompetition, allFighters]
   );
 
   const getMyAvailablePicks = useCallback((): Fighter[] => {
-    if (!currentCompetition || !userId || currentCompetition.currentPickerId !== userId || allFighters.length === 0) return [];
+    if (!currentCompetition || !userId || currentCompetition.currentPickerId !== userId || allFighters.length === 0) {
+      return [];
+    }
 
-    const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {};
+    const playerDraftedFighters = currentCompetition.draftedFighters[userId] || {};
     const playerPickedWeightClasses = Object.keys(playerDraftedFighters).filter((key) => key !== 'Flex');
 
     const availableSpecificSlots = WEIGHT_CLASSES.filter((wc) => !playerPickedWeightClasses.includes(wc));
@@ -525,19 +503,19 @@ const App: React.FC = () => {
   }, [currentCompetition, userId, allFighters, getUndraftedFighters]);
 
   const renderDraftStatus = (): JSX.Element | null => {
-    if (!currentCompetition) return null;
+    if (!currentCompetition || !userId) return null;
 
     if (currentCompetition.status === 'completed') {
       return <p className="text-xl text-green-400 font-bold text-center mt-4">Draft Completed!</p>;
     }
 
     if (currentCompetition.status === 'in_progress') {
-      const currentPickerName = currentCompetition.playerNames?.[currentCompetition.currentPickerId as string] || 'Unknown Player';
+      const currentPickerName = currentCompetition.playerNames[currentCompetition.currentPickerId!] || 'Unknown Player';
       const isMyTurn = currentCompetition.currentPickerId === userId;
       const minutes = Math.floor(timeLeft / 60);
       const seconds = timeLeft % 60;
 
-      const playerDraftedFighters = currentCompetition.draftedFighters?.[userId] || {};
+      const playerDraftedFighters = currentCompetition.draftedFighters[userId] || {};
       const pickedWeightClasses = Object.keys(playerDraftedFighters).filter((key) => key !== 'Flex');
       const missingWeightClasses = WEIGHT_CLASSES.filter((wc) => !pickedWeightClasses.includes(wc));
       const needsFlex = !playerDraftedFighters['Flex'];
@@ -552,8 +530,8 @@ const App: React.FC = () => {
         nextPickRequirement = `Waiting for other players to pick.`;
       }
 
-      const fightersToDisplay = isMyTurn ? getMyAvailablePicks() : getUndraftedFighters();
-      const filteredFighters = (fightersToDisplay as Fighter[]).filter((fighter) =>
+      const fightersToDisplay = isMyTurn ? getMyAvailablePicks() : (getUndraftedFighters() as Fighter[]);
+      const filteredFighters = fightersToDisplay.filter((fighter) =>
         fighter.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
 
@@ -635,7 +613,7 @@ const App: React.FC = () => {
               {WEIGHT_CLASSES.map((wc) => (
                 <div key={wc} className="bg-gray-600 p-3 rounded-lg shadow-md">
                   <p className="font-bold text-gray-200">{wc}:</p>
-                  {currentCompetition.draftedFighters?.[userId]?.[wc] ? (
+                  {currentCompetition.draftedFighters[userId]?.[wc] ? (
                     <div className="flex items-center space-x-2 mt-1">
                       <img
                         src={
@@ -654,7 +632,7 @@ const App: React.FC = () => {
               ))}
               <div className="bg-gray-600 p-3 rounded-lg shadow-md">
                 <p className="font-bold text-gray-200">Flex:</p>
-                {currentCompetition.draftedFighters?.[userId]?.['Flex'] ? (
+                {currentCompetition.draftedFighters[userId]?.['Flex'] ? (
                   <div className="flex items-center space-x-2 mt-1">
                     <img
                       src={
@@ -684,12 +662,15 @@ const App: React.FC = () => {
     return null;
   };
 
-  // Main render (minimal for now, as original code only includes renderDraftStatus)
   return (
     <div className="container mx-auto p-4">
       {loading && <p className="text-center text-gray-400">Loading...</p>}
       {error && <p className="text-center text-red-400">{error}</p>}
       {message && <p className="text-center text-green-400">{message}</p>}
+      {!loading && !error && !userId && <p className="text-center text-gray-400">Authenticating...</p>}
+      {!loading && !error && userId && !currentCompetition && (
+        <p className="text-center text-gray-400">No active competition. Create or join one below.</p>
+      )}
       <div className="mb-4">
         <label className="block text-gray-200">Display Name:</label>
         <input
@@ -723,7 +704,7 @@ const App: React.FC = () => {
         >
           Join Competition
         </button>
-        {currentCompetition && currentCompetition.creatorId === userId && currentCompetition.status === 'setup' && (
+        {currentCompetition && userId && currentCompetition.creatorId === userId && currentCompetition.status === 'setup' && (
           <>
             <button
               onClick={shufflePlayers}
@@ -742,7 +723,7 @@ const App: React.FC = () => {
           </>
         )}
       </div>
-      {currentCompetition && renderDraftStatus()}
+      {currentCompetition && userId && renderDraftStatus()}
     </div>
   );
 };
