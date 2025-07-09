@@ -28,7 +28,7 @@ const WEIGHT_CLASSES = [
 // DraftKings Scoring System (for display)
 // (Removed unused DRAFTKINGS_SCORING to fix compile error)
 
-export default function App() {
+export default function App() {}
   const [db, setDb] = useState<Firestore | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string>('');
