@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './app'; // Use the correct casing as on disk
+import App from './App'; // Corrected: Use uppercase 'A' for App
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
