@@ -28,7 +28,7 @@ const WEIGHT_CLASSES = [
 // DraftKings Scoring System (for display)
 // (Removed unused DRAFTKINGS_SCORING to fix compile error)
 
-export default function App() {}
+export default function App() {
   const [db, setDb] = useState<Firestore | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string>('');
@@ -103,8 +103,6 @@ export default function App() {}
     };
     fetchFighters();
   }, []);
-
-  // Main render is moved to the end of the component to avoid unreachable code below.
 
   // Set up real-time listener for current competition
   useEffect(() => {
@@ -194,7 +192,7 @@ export default function App() {}
     const appId: string = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     try {
       const competitionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'competitions');
-      const newCompetitionRef = doc(competitionsRef);
+      const newCompetitionRef = doc(competitionsRef, crypto.randomUUID());
       await setDoc(newCompetitionRef, {
         name: competitionName.trim(),
         players: [userId],
@@ -584,3 +582,4 @@ export default function App() {}
       )}
     </div>
   );
+}
